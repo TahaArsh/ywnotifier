@@ -29,16 +29,20 @@ import requests
 DISCORD_WEBHOOK_URL_DEFAULT = "https://discord.com/api/webhooks/1541960697565413458/H11fyv-KlKnVp6qKhCEWqQiamMSknHP7mfGeYfrJcemWgviiAkY65uANxzhy6G0rEsAO"
 
 # ----------------------------------------------------------------------
-# CONFIG — edit this list with your wishlist item names
+# CONFIG — your wishlist now lives in wishlist.txt (one item per line)
+# instead of here, so you can edit it without touching this file.
 # ----------------------------------------------------------------------
 
-WISHLIST = [
-    "Flying Bat Costume",
-    "Animated Personal Flurry",
-    "Pink Retro Specks",
-    "Blue Retro Specks",
-    # add more item names (or partial names) here
-]
+WISHLIST_FILE = Path(__file__).parent / "wishlist.txt"
+
+
+def load_wishlist() -> list:
+    if not WISHLIST_FILE.exists():
+        print(f"WARNING: {WISHLIST_FILE.name} not found — wishlist is empty.", file=sys.stderr)
+        return []
+    lines = WISHLIST_FILE.read_text(encoding="utf-8").splitlines()
+    # ignore blank lines and lines starting with # (comments)
+    return [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
 
 SEEN_FILE = Path(__file__).parent / "seen_bids.json"
 
@@ -124,10 +128,15 @@ def send_discord_alert(new_items: list) -> None:
 
 
 def main():
+    wishlist = load_wishlist()
+    if not wishlist:
+        print("Wishlist is empty — nothing to check.")
+        return
+
     seen = load_seen()
     new_items = []
 
-    for name in WISHLIST:
+    for name in wishlist:
         try:
             results = search_item(name)
         except requests.RequestException as e:
