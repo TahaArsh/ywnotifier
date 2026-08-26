@@ -63,17 +63,36 @@ MAX_RETRIES = 3
 # ----------------------------------------------------------------------
 
 
-def load_seen() -> set:
-    if SEEN_FILE.exists():
-        try:
-            return set(json.loads(SEEN_FILE.read_text()))
-        except (json.JSONDecodeError, OSError):
-            return set()
-    return set()
+PRUNE_AFTER_SECONDS = 48 * 60 * 60  # remove entries 48h after their auction ended
 
 
-def save_seen(seen: set) -> None:
-    SEEN_FILE.write_text(json.dumps(sorted(seen)))
+def load_seen() -> dict:
+    """Returns a dict of {bid_id: end_date}. Handles migrating the old
+    flat-list format transparently if it's still around from before."""
+    if not SEEN_FILE.exists():
+        return {}
+    try:
+        data = json.loads(SEEN_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    if isinstance(data, list):
+        # old format: just bid_ids, no end_date known — stamp with "now"
+        # so they still get cleaned up ~48h from today rather than kept forever
+        now = int(time.time())
+        return {str(bid_id): now for bid_id in data}
+
+    return {str(k): v for k, v in data.items()}
+
+
+def save_seen(seen: dict) -> None:
+    # prune anything whose auction ended more than PRUNE_AFTER_SECONDS ago
+    cutoff = int(time.time()) - PRUNE_AFTER_SECONDS
+    pruned = {bid_id: end_date for bid_id, end_date in seen.items() if end_date >= cutoff}
+    removed = len(seen) - len(pruned)
+    if removed:
+        print(f"Pruned {removed} expired entr{'y' if removed == 1 else 'ies'} from seen_bids.json.")
+    SEEN_FILE.write_text(json.dumps(pruned, sort_keys=True))
 
 
 def search_item(item_name: str) -> list:
@@ -143,11 +162,25 @@ def main():
             print(f"Error checking '{name}': {e}", file=sys.stderr)
             continue
 
+        now = int(time.time())
         for item in results:
             bid_id = item.get("bid_id")
-            if bid_id is None or bid_id in seen:
+            if bid_id is None:
                 continue
-            seen.add(bid_id)
+            bid_id = str(bid_id)
+
+            end_date = item.get("end_date")
+            already_ended = end_date is not None and end_date < now
+
+            if bid_id in seen:
+                continue
+
+            # Remember we've seen it either way, so we don't keep
+            # re-evaluating old/ended auctions on every future run —
+            # but only actually ALERT on ones that are still live.
+            seen[bid_id] = end_date if end_date is not None else now
+            if already_ended:
+                continue
             new_items.append(item)
 
     if new_items:
