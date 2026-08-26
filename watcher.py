@@ -20,6 +20,7 @@ secret), you still can — DISCORD_WEBHOOK_URL env var takes priority if set.
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import requests
@@ -42,7 +43,15 @@ API_URL = "https://yoworld.net/api/v1/yoworld/auction/search"
 HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://yoworld.net",
+    "Referer": "https://yoworld.net/auction-house",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    ),
 }
+MAX_RETRIES = 3
 
 # ----------------------------------------------------------------------
 
@@ -68,12 +77,21 @@ def search_item(item_name: str) -> list:
         "start": 0,
         "item_name": item_name,
     }
-    resp = requests.put(API_URL, headers=HEADERS, json=payload, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("success"):
-        return []
-    return data.get("results", [])
+
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.put(API_URL, headers=HEADERS, json=payload, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("success"):
+                return []
+            return data.get("results", [])
+        except requests.RequestException as e:
+            last_error = e
+            if attempt < MAX_RETRIES:
+                time.sleep(3 * attempt)  # simple backoff: 3s, 6s
+    raise last_error
 
 
 def send_discord_alert(new_items: list) -> None:
