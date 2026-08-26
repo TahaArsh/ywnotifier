@@ -34,6 +34,10 @@ DISCORD_WEBHOOK_URL_DEFAULT = "https://discord.com/api/webhooks/1541960697565413
 
 WISHLIST = [
     "Flying Bat Costume",
+    "Mischief Pierre Wolfcut Kawaii Hair",
+    "Animated Personal Flurry",
+    "Pink Retro Specks",
+    "Blue Retro Specks",
     # add more item names (or partial names) here
 ]
 
