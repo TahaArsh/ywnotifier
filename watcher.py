@@ -130,10 +130,15 @@ def send_discord_alert(new_items: list) -> None:
     lines = [f"**YoWorld Auction Alert — {len(new_items)} new item(s)!**\n"]
     for item in new_items:
         currency = "Cash" if item.get("currency") == 2 else "Coins"
+        end_date = item.get("end_date")
+        # Discord's <t:UNIX:R> renders as a live, auto-updating relative
+        # time ("ends in 2 hours") in each reader's own local timezone.
+        ends_line = f"\n  Ends: <t:{end_date}:R>" if end_date else ""
         lines.append(
             f"• **{item['item_name']}**\n"
             f"  Current bid: {item.get('cur_bid_amount', '?')} {currency} "
             f"| Buy now: {item.get('max_price', '?')} {currency}"
+            f"{ends_line}"
         )
 
     content = "\n".join(lines)
