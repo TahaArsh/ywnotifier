@@ -12,9 +12,8 @@ State (which auctions you've already been notified about) is kept in
 seen_bids.json, which the GitHub Actions workflow commits back to the
 repo after each run so it persists between scheduled checks.
 
-Required environment variable (set as a GitHub Actions secret — this
-keeps it hidden even if the repo itself is public):
-    DISCORD_WEBHOOK_URL - webhook URL for the channel you want alerts in
+Discord webhook is set directly below as a default. If you ever add a
+GitHub secret named DISCORD_WEBHOOK_URL, it takes priority over this.
 """
 
 import json
@@ -24,6 +23,9 @@ import time
 from pathlib import Path
 
 import requests
+
+# Your Discord webhook — messages get posted straight to that channel.
+DISCORD_WEBHOOK_URL_DEFAULT = "https://discord.com/api/webhooks/1541960697565413458/H11fyv-KlKnVp6qKhCEWqQiamMSknHP7mfGeYfrJcemWgviiAkY65uANxzhy6G0rEsAO"
 
 # ----------------------------------------------------------------------
 # CONFIG — your wishlist now lives in wishlist.txt (one item per line)
@@ -158,11 +160,10 @@ def _item_to_embed(item: dict) -> dict:
 
 
 def send_discord_alert(new_items: list) -> None:
-    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", DISCORD_WEBHOOK_URL_DEFAULT)
 
     if not webhook_url:
-        print("No DISCORD_WEBHOOK_URL set — skipping alert.", file=sys.stderr)
-        return
+        raise RuntimeError("No Discord webhook URL configured — cannot send alert.")
 
     embeds = [_item_to_embed(item) for item in new_items]
 
@@ -192,7 +193,8 @@ def main():
         return
 
     seen = load_seen()
-    new_items = []
+    new_items = []          # live matches to alert on
+    new_bid_dates = {}      # bid_id -> end_date, only marked "seen" after a successful send
 
     for name in wishlist:
         try:
@@ -219,13 +221,15 @@ def main():
                 already_seen_count += 1
                 continue
 
-            # Remember we've seen it either way, so we don't keep
-            # re-evaluating old/ended auctions on every future run —
-            # but only actually ALERT on ones that are still live.
-            seen[bid_id] = end_date if end_date is not None else now
             if already_ended:
+                # No alert was ever owed for this one — safe to mark seen now.
+                seen[bid_id] = end_date if end_date is not None else now
                 already_ended_count += 1
                 continue
+
+            # Still live and not yet seen — hold off marking it "seen"
+            # until we've actually confirmed the alert was sent.
+            new_bid_dates[bid_id] = end_date if end_date is not None else now
             matched_new_count += 1
             new_items.append(item)
 
@@ -237,7 +241,13 @@ def main():
 
     if new_items:
         print(f"Found {len(new_items)} new item(s). Sending Discord alert...")
-        send_discord_alert(new_items)
+        try:
+            send_discord_alert(new_items)
+        except (requests.RequestException, RuntimeError) as e:
+            print(f"Discord send failed: {e} — NOT marking these as seen, will retry next run.", file=sys.stderr)
+        else:
+            # Only commit these to "seen" now that the alert actually went out.
+            seen.update(new_bid_dates)
     else:
         print("No new items this run.")
 
