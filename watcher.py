@@ -201,6 +201,10 @@ def main():
             print(f"Error checking '{name}': {e}", file=sys.stderr)
             continue
 
+        already_seen_count = 0
+        already_ended_count = 0
+        matched_new_count = 0
+
         now = int(time.time())
         for item in results:
             bid_id = item.get("bid_id")
@@ -212,6 +216,7 @@ def main():
             already_ended = end_date is not None and end_date < now
 
             if bid_id in seen:
+                already_seen_count += 1
                 continue
 
             # Remember we've seen it either way, so we don't keep
@@ -219,8 +224,16 @@ def main():
             # but only actually ALERT on ones that are still live.
             seen[bid_id] = end_date if end_date is not None else now
             if already_ended:
+                already_ended_count += 1
                 continue
+            matched_new_count += 1
             new_items.append(item)
+
+        print(
+            f"'{name}': API returned {len(results)} raw result(s) "
+            f"({already_seen_count} already seen, {already_ended_count} already ended, "
+            f"{matched_new_count} new & live)"
+        )
 
     if new_items:
         print(f"Found {len(new_items)} new item(s). Sending Discord alert...")
