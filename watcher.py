@@ -6,14 +6,17 @@ Checks yoworld.net's public auction search API for each item on your
 wishlist and posts a Discord message when a NEW auction listing appears
 for one of them. Designed to run as a one-shot script triggered on a
 schedule by GitHub Actions (see .github/workflows/check.yml) — no
-server, no always-on computer, no email account/password needed.
+server, no always-on computer needed.
 
 State (which auctions you've already been notified about) is kept in
 seen_bids.json, which the GitHub Actions workflow commits back to the
 repo after each run so it persists between scheduled checks.
 
-Discord webhook is set directly below as a default. If you ever add a
-GitHub secret named DISCORD_WEBHOOK_URL, it takes priority over this.
+Required environment variable (set as a GitHub Actions secret — this
+is the ONLY place the webhook lives now, since this repo is public.
+Secrets are never exposed via the repo UI, history, or API, regardless
+of visibility):
+    DISCORD_WEBHOOK_URL - webhook URL for the channel you want alerts in
 """
 
 import json
@@ -24,11 +27,8 @@ from pathlib import Path
 
 import requests
 
-# Your Discord webhook — messages get posted straight to that channel.
-DISCORD_WEBHOOK_URL_DEFAULT = "https://discord.com/api/webhooks/1541960697565413458/H11fyv-KlKnVp6qKhCEWqQiamMSknHP7mfGeYfrJcemWgviiAkY65uANxzhy6G0rEsAO"
-
 # ----------------------------------------------------------------------
-# CONFIG — your wishlist now lives in wishlist.txt (one item per line)
+# CONFIG — your wishlist lives in wishlist.txt (one item per line)
 # instead of here, so you can edit it without touching this file.
 # ----------------------------------------------------------------------
 
@@ -42,6 +42,7 @@ def load_wishlist() -> list:
     lines = WISHLIST_FILE.read_text(encoding="utf-8").splitlines()
     # ignore blank lines and lines starting with # (comments)
     return [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
+
 
 SEEN_FILE = Path(__file__).parent / "seen_bids.json"
 
@@ -76,8 +77,6 @@ def load_seen() -> dict:
         return {}
 
     if isinstance(data, list):
-        # old format: just bid_ids, no end_date known — stamp with "now"
-        # so they still get cleaned up ~48h from today rather than kept forever
         now = int(time.time())
         return {str(bid_id): now for bid_id in data}
 
@@ -85,7 +84,6 @@ def load_seen() -> dict:
 
 
 def save_seen(seen: dict) -> None:
-    # prune anything whose auction ended more than PRUNE_AFTER_SECONDS ago
     cutoff = int(time.time()) - PRUNE_AFTER_SECONDS
     pruned = {bid_id: end_date for bid_id, end_date in seen.items() if end_date >= cutoff}
     removed = len(seen) - len(pruned)
@@ -115,7 +113,7 @@ def search_item(item_name: str) -> list:
         except requests.RequestException as e:
             last_error = e
             if attempt < MAX_RETRIES:
-                time.sleep(3 * attempt)  # simple backoff: 3s, 6s
+                time.sleep(3 * attempt)
     raise last_error
 
 
@@ -160,18 +158,16 @@ def _item_to_embed(item: dict) -> dict:
 
 
 def send_discord_alert(new_items: list) -> None:
-    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", DISCORD_WEBHOOK_URL_DEFAULT)
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
 
     if not webhook_url:
-        raise RuntimeError("No Discord webhook URL configured — cannot send alert.")
+        raise RuntimeError("DISCORD_WEBHOOK_URL is not set — cannot send alert.")
 
     embeds = [_item_to_embed(item) for item in new_items]
 
-    # Discord allows max 10 embeds per message — batch if we ever exceed that
     BATCH_SIZE = 10
     for i in range(0, len(embeds), BATCH_SIZE):
         batch = embeds[i:i + BATCH_SIZE]
-        count_in_batch = len(batch)
         total_batches = (len(embeds) + BATCH_SIZE - 1) // BATCH_SIZE
         batch_num = i // BATCH_SIZE + 1
 
@@ -193,8 +189,8 @@ def main():
         return
 
     seen = load_seen()
-    new_items = []          # live matches to alert on
-    new_bid_dates = {}      # bid_id -> end_date, only marked "seen" after a successful send
+    new_items = []
+    new_bid_dates = {}
 
     for name in wishlist:
         try:
@@ -222,13 +218,10 @@ def main():
                 continue
 
             if already_ended:
-                # No alert was ever owed for this one — safe to mark seen now.
                 seen[bid_id] = end_date if end_date is not None else now
                 already_ended_count += 1
                 continue
 
-            # Still live and not yet seen — hold off marking it "seen"
-            # until we've actually confirmed the alert was sent.
             new_bid_dates[bid_id] = end_date if end_date is not None else now
             matched_new_count += 1
             new_items.append(item)
@@ -246,7 +239,6 @@ def main():
         except (requests.RequestException, RuntimeError) as e:
             print(f"Discord send failed: {e} — NOT marking these as seen, will retry next run.", file=sys.stderr)
         else:
-            # Only commit these to "seen" now that the alert actually went out.
             seen.update(new_bid_dates)
     else:
         print("No new items this run.")
